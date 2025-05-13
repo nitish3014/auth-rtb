@@ -1,0 +1,143 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.1.2'
+    id 'io.spring.dependency-management' version '1.1.2'
+    id 'checkstyle'
+    id 'jacoco'
+    id 'org.flywaydb.flyway' version '8.5.13'
+
+
+}
+
+group = 'com.rtb.auth'
+description = 'RTB auth service'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    sourceCompatibility = '17'
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+}
+
+repositories {
+    mavenCentral()
+    mavenLocal()
+}
+
+ext {
+    springVersion = "3.1.2"
+    postgresqlVersion = "42.6.0"
+    lombokVersion = "1.18.28"
+    logstashVersion = "6.4"
+    flywaydbVersion = "8.5.13"
+    libPhoneNumberVersion = "8.13.20"
+}
+
+dependencies {
+    implementation "org.springframework.boot:spring-boot-starter-web:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-starter-actuator:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-starter-data-jpa:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-starter-validation:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-starter-oauth2-authorization-server:${springVersion}"
+    implementation "net.logstash.logback:logstash-logback-encoder:${logstashVersion}"
+    implementation "org.flywaydb:flyway-core:${flywaydbVersion}"
+    implementation "com.googlecode.libphonenumber:libphonenumber:${libPhoneNumberVersion}"
+    implementation 'javax.servlet:javax.servlet-api:4.0.1'
+    implementation group: 'org.springframework.security', name: 'spring-security-jwt', version: '1.1.1.RELEASE'
+    implementation 'io.jsonwebtoken:jjwt-api:0.11.2'
+    // https://mvnrepository.com/artifact/org.springdoc/springdoc-openapi-starter-webmvc-ui
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.2.0'
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt
+    implementation 'io.jsonwebtoken:jjwt:0.9.1'
+    // https://mvnrepository.com/artifact/com.auth0/jwks-rsa
+    implementation 'com.auth0:jwks-rsa:0.22.1'
+
+    // https://mvnrepository.com/artifact/com.auth0/java-jwt
+    implementation 'com.auth0:java-jwt:4.4.0'
+
+    implementation "com.rtb.core:core:0.0.1"
+
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
+    annotationProcessor "org.projectlombok:lombok:${lombokVersion}"
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.2'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.11.2'
+
+
+
+    compileOnly 'org.projectlombok:lombok:1.18.24'
+    annotationProcessor 'org.projectlombok:lombok:1.18.24'
+    testCompileOnly 'org.projectlombok:lombok:1.18.24'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.24'
+
+
+
+    developmentOnly "org.springframework.boot:spring-boot-devtools:${springVersion}"
+
+    runtimeOnly "org.postgresql:postgresql:${postgresqlVersion}"
+
+    annotationProcessor "org.projectlombok:lombok:${lombokVersion}"
+    annotationProcessor "org.springframework.boot:spring-boot-configuration-processor:${springVersion}"
+
+    testImplementation "org.springframework.boot:spring-boot-starter-test:${springVersion}"
+
+}
+tasks.named('test') {
+    useJUnitPlatform()
+    finalizedBy jacocoTestReport // Generate JaCoCo report after tests run
+}
+jacoco {
+    toolVersion = "0.8.7" // Or any later version that supports Java 18
+}
+
+test {
+    useJUnitPlatform()
+    finalizedBy 'jacocoTestReport' // Ensures that the report is generated after tests are run
+}
+
+jacocoTestReport {
+    dependsOn test // Ensures report is generated after tests run
+    reports {
+        jacoco {
+            toolVersion = "0.8.12" // Or any later version that supports Java 18
+        }
+
+        test {
+            useJUnitPlatform()
+            finalizedBy 'jacocoTestReport' // Ensures that the report is generated after tests are run
+        }
+
+        jacocoTestReport {
+            dependsOn test // Ensures report is generated after tests run
+            reports {
+                xml.required.set(true)
+                html.required.set(true)
+            }
+        }
+
+    }
+}
+
+
+check.dependsOn jacocoTestCoverageVerification
+
+checkstyle {
+    configFile file("checkstyle/checkstyle.xml")
+}
+//
+//flyway {
+//    enabled = False
+//    url = 'jdbc:postgresql://localhost:5432/pixid'  // From your application.yml
+//    user = 'pramods'                                // From your application.yml
+//    password = 'User@123'                          // From your application.yml
+//    schemas = ['public']                           // Default schema
+//    locations = ['filesystem:src/main/resources/db/migration']
+//    baselineOnMigrate = true
+//}

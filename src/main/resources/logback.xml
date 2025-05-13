@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- logger context takes the value of package e.g. in auth service it will be com.bellboy.auth -->
+    <property name="LOGGER_CONTEXT" value="com.bellboy.auth"/>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <customFields>{"env":"${ENVIRONMENT}"}</customFields>
+        </encoder>
+    </appender>
+    <logger name="${LOGGER_CONTEXT}" level="INFO" additivity="false">
+        <appender-ref ref="STDOUT" />
+    </logger>
+    <logger name="org.flywaydb" level="INFO" />
+    <root level="error">
+        <appender-ref ref="STDOUT" />
+    </root>
+</configuration>

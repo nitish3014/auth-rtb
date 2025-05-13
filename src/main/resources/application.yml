@@ -1,0 +1,89 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: rtb-auth-service
+
+  datasource:
+    driverClassName: org.postgresql.Driver
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        default_schema: ${DATABASE_SCHEMA:public}
+        jdbc:
+          lob:
+            non_contextual_creation: true
+  flyway:
+    enabled: false
+
+cypher:
+  key: 7ca1948cf01931a1df46248ee263613c6dc71aa100fafabdd86fcb814eb9a678
+
+apple:
+  client-id: ${APPLE_CLIENT_ID}
+  client-secret: ${APPLE_CLIENT_SECRET}
+  team-id: ${APPLE_TEAM_ID}
+  key-id: ${APPLE_KEY_ID}
+
+url:
+  message_bus_service: ${MESSAGE_BUS_SERVICE_URL}
+
+auth:
+  public-key: ${PUBLIC_KEY_CONTENT:default_value}
+  private-key: ${PRIVATE_KEY_CONTENT:default_value}
+  hotel-admin-access-token-expiry: 1
+  hotel-bellboy-access-token-expiry: 5
+
+springdoc.api-docs.path: api-docs/
+
+springdoc:
+  api-docs:
+    path: /api/v1/auth/v3/api-docs
+  swagger-ui:
+    path: /api/v1/auth/swagger-ui/index.html
+
+management:
+  server:
+    port: 8082
+  security:
+    enabled: false
+    roles: NONE 
+  endpoints:
+    web:
+      base-path: "/api/v1/auth/actuator"
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always
+  tracing:
+    enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+app:
+  default-otp: ${DEFAULT_OTP:654321}
+  enable-default-otp: ${ENABLE_DEFAULT_OTP:true}
+
+
+logging:
+  level:
+    root: INFO
+    org.springframework.web: DEBUG
+    org.hibernate: ERROR
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
