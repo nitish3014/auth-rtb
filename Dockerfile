@@ -1,33 +1,22 @@
-# Stage 1: Builder with Gradle cache
-FROM --platform=linux/amd64 eclipse-temurin:17-jdk-alpine as builder
+
+FROM eclipse-temurin:17-jdk-alpine AS builder
 
 WORKDIR /tmp/app
 
-# Cache Gradle dependencies
-COPY gradle gradle
-COPY gradlew .
-COPY build.gradle .
-COPY settings.gradle .
-RUN ./gradlew dependencies --no-daemon
+COPY . /tmp/app
+RUN chmod +x gradlew
 
-# Build application
-COPY src src
-RUN ./gradlew clean build -x test --no-daemon --stacktrace
+RUN ./gradlew clean build --stacktrace
 
-# Stage 2: Slim runtime image
-FROM --platform=linux/arm64 eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:17-jre-alpine
 
 WORKDIR /app
 
-# Copy built jar
 COPY --from=builder /tmp/app/build/libs/*.jar /app/app.jar
+COPY entrypoint.sh          /app/entrypoint.sh
 
-# Copy entrypoint
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-
-# Install tini for proper signal handling
-RUN apk add --no-cache tini bash
+RUN chmod +x /app/entrypoint.sh \
+ && apk add --no-cache bash
 
 EXPOSE 8080
-ENTRYPOINT ["/sbin/tini", "--", "/app/entrypoint.sh"]
+ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
