@@ -13,7 +13,8 @@ jobs:
       AWS_REGION:          us-east-1
       AWS_ACCOUNT_ID:      972251037797
       EKS_CLUSTER_NAME:    rtb-eks-dev
-      DEPLOYMENT_NAME:     rtb-dev-auth-service
+      IMAGE_NAME:          rtb-dev-auth-service   # your ECR image name
+      DEPLOYMENT_NAME:     rtb-auth-service
       K8S_NAMESPACE:       default
       BASTION_IP:          35.170.113.92
       BASTION_USER:        ubuntu
@@ -146,14 +147,19 @@ jobs:
           docker push ${IMAGE_URI}:latest
 
       # 14. Deploy to EKS
+      # 14. Deploy to EKS
       - name: Deploy to EKS
         env:
-          KUBECONFIG: ${{ github.workspace }}/kubeconfig
+          KUBECONFIG:      ${{ github.workspace }}/kubeconfig
+          DEPLOYMENT_NAME: rtb-auth-service
+          IMAGE_NAME:      rtb-dev-auth-service
         run: |
-          kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
-            ${{ env.DEPLOYMENT_NAME }}=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}:${{ env.VERSION }} \
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+          kubectl set image deployment/${DEPLOYMENT_NAME} \
+            ${IMAGE_NAME}=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${IMAGE_NAME}:${{ env.VERSION }} \
             -n ${{ env.K8S_NAMESPACE }}
-          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }}
+          kubectl rollout status deployment/${DEPLOYMENT_NAME} -n ${{ env.K8S_NAMESPACE }}
+
 
       # 15. Notify Build Result
       - name: Notify Build Result
