@@ -31,23 +31,18 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          # grab last commit info
           commit_details=$(git log -1 --pretty=format:'%s|%an')
           commit_message=${commit_details%%|*}
           committer_name=${commit_details##*|}
           build_name="${GITHUB_REPOSITORY}"
           build_number="${GITHUB_RUN_NUMBER}"
           build_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          # payload
           read -r -d '' payload <<EOF
           {
             "text": "🚀 *Build Started*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
           }
           EOF
-          # fire off, but don’t fail build if this errors
-          curl -X POST -H 'Content-Type: application/json' \
-            --data "$payload" \
-            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
+          curl -X POST -H 'Content-Type: application/json' --data "$payload" "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
 
       # 3. Configure AWS creds
       - name: Configure AWS credentials
@@ -83,7 +78,7 @@ jobs:
           VER="${SHA}-${GITHUB_RUN_NUMBER}"
           echo "VERSION=${VER}" >> $GITHUB_ENV
 
-      # 8. Install jq (for later JSON parsing)
+      # 8. Install jq
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
@@ -98,15 +93,10 @@ jobs:
         run: |
           echo "${{ secrets.BASTION_PEM_KEY }}" > bastion_key.pem
           chmod 600 bastion_key.pem
-          ssh -o StrictHostKeyChecking=no \
-              -i bastion_key.pem \
-              ${{ env.BASTION_USER }}@${{ env.BASTION_IP }} \
-              "aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}"
-          scp -o StrictHostKeyChecking=no \
-              -i bastion_key.pem \
-              ${{ env.BASTION_USER }}@${{ env.BASTION_IP }}:~/.kube/config ./kubeconfig
+          ssh -o StrictHostKeyChecking=no -i bastion_key.pem ${{ env.BASTION_USER }}@${{ env.BASTION_IP }} "aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}"
+          scp -o StrictHostKeyChecking=no -i bastion_key.pem ${{ env.BASTION_USER }}@${{ env.BASTION_IP }}:~/.kube/config ./kubeconfig
 
-      # 11. Fetch AWS Secrets & create/update K8s secret
+      # 11. Fetch AWS Secrets & Store in Kubernetes
       - name: Fetch AWS Secrets & Store in Kubernetes
         env:
           KUBECONFIG: ${{ github.workspace }}/kubeconfig
@@ -128,50 +118,55 @@ jobs:
             -n ${{ env.K8S_NAMESPACE }} \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      # 12. Login to Amazon ECR
+      # 12. Set up Docker Buildx for multi-arch build
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver: docker-container
+          buildkitd-flags: --debug
+          install: true
+
+      # 13. Login to Amazon ECR
       - name: Login to Amazon ECR
         run: |
           aws ecr get-login-password --region ${{ env.AWS_REGION }} \
             | docker login --username AWS --password-stdin \
               ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
 
-      # 13. Build & push Docker image
+      # 14. Build & Push Multi-Arch Docker Image
       - name: Build & Push Multi-Arch Docker Image
         run: |
           IMAGE_URI=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}
+          docker buildx create --use --name mybuilder || true
+          docker buildx inspect --bootstrap
           docker buildx build --platform linux/amd64,linux/arm64 \
             -t ${IMAGE_URI}:${{ env.VERSION }} \
             -t ${IMAGE_URI}:latest \
             --push .
 
-
-      # 14. Deploy to EKS
+      # 15. Deploy to EKS
       - name: Deploy to EKS
         env:
           KUBECONFIG: ${{ github.workspace }}/kubeconfig
         run: |
-          # Force a new deployment by updating an annotation
           kubectl patch deployment ${{ env.DEPLOYMENT_NAME }} \
             -n ${{ env.K8S_NAMESPACE }} \
             -p '{"spec":{"template":{"metadata":{"annotations":{"deploymentTimestamp":"'"$(date +%s)"'"}}}}}'
           
-          # Update the image
           kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
             ${{ env.DEPLOYMENT_NAME }}=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}:${{ env.VERSION }} \
             -n ${{ env.K8S_NAMESPACE }}
-          
-          # Wait for rollout with timeout
+
           kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} \
             -n ${{ env.K8S_NAMESPACE }} \
             --timeout=300s
 
-      # 15. Notify Build Result
+      # 16. Notify Build Result
       - name: Notify Build Result
         if: always()
         continue-on-error: true
         run: |
           set +e
-          # success vs failure
           if [ "${{ job.status }}" = "success" ]; then
             build_status="✅ Succeeded"
           else
@@ -188,6 +183,4 @@ jobs:
             "text": "🔔 *Build Completed*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Status:* ${build_status}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
           }
           EOF
-          curl -X POST -H 'Content-Type: application/json' \
-            --data "$result_payload" \
-            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
+          curl -X POST -H 'Content-Type: application/json' --data "$result_payload" "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
