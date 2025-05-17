@@ -111,8 +111,8 @@ jobs:
         env:
           KUBECONFIG: ${{ github.workspace }}/kubeconfig
         run: |
-          DB=$(aws secretsmanager get-secret-value --secret-id hb-prod/db  --query SecretString --output text)
-          AW=$(aws secretsmanager get-secret-value --secret-id hb-prod/aws --query SecretString --output text)
+          DB=$(aws secretsmanager get-secret-value --secret-id rtb-dev/db  --query SecretString --output text)
+          AW=$(aws secretsmanager get-secret-value --secret-id rtb-dev/auth-service --query SecretString --output text)
           if [ -z "$DB" ] || [ -z "$AW" ]; then
             echo "❌ Missing AWS secrets" && exit 1
           fi
