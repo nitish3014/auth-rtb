@@ -12,7 +12,7 @@ FROM eclipse-temurin:17-jre-alpine
 
 WORKDIR /app
 
-COPY --from=builder /tmp/app/build/libs/bb-auth-service-0.0.1-SNAPSHOT.jar /app/app.jar
+COPY --from=builder /tmp/app/build/libs/*.jar /app/app.jar
 
 COPY entrypoint.sh /app/entrypoint.sh
 
