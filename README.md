@@ -1,4 +1,4 @@
-# Auth Service
+## Auth Service
  
 ## Environment Variables
 ```shell
