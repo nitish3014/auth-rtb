@@ -1,183 +1,167 @@
-name: CI/CD Deploy to EKS
+name: EKS Deployment Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: '972251037797'
+  EKS_CLUSTER_NAME: 'rtb-eks-dev'
+  DEPLOYMENT_NAME: 'rtb-dev-auth-service'
+  K8S_NAMESPACE: 'default'
+  BASTION_IP: 35.170.113.92
+  BASTION_USER: ubuntu
+  S3_BUCKET_NAME: 'rtb-dev-artifact'
+  S3_ARTIFACT_KEY: 'rtb-core-0.0.1-SNAPSHOT.jar'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
-    env:
-      AWS_REGION:          us-east-1
-      AWS_ACCOUNT_ID:      972251037797
-      EKS_CLUSTER_NAME:    rtb-eks-dev
-      DEPLOYMENT_NAME:     rtb-dev-auth-service
-      K8S_NAMESPACE:       default
-      BASTION_IP:          35.170.113.92
-      BASTION_USER:        ubuntu
-      S3_BUCKET_NAME:      rtb-dev-artifact
-      S3_ARTIFACT_KEY:     rtb-core-0.0.1-SNAPSHOT.jar
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      # 1. Checkout
-      - name: Checkout code
+      # ──── 1. Checkout Code ────
+      - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
 
-      # 2. Notify Build Start
+      # ──── 2. Notify Build Start ────
       - name: Notify Build Start
-        id: notify_start
         continue-on-error: true
         run: |
-          set +e
-          # grab last commit info
-          commit_details=$(git log -1 --pretty=format:'%s|%an')
+          commit_details=$(git log -1 --pretty=format:'%s|%an' || echo "Unknown|Unknown")
           commit_message=${commit_details%%|*}
           committer_name=${commit_details##*|}
-          build_name="${GITHUB_REPOSITORY}"
-          build_number="${GITHUB_RUN_NUMBER}"
-          build_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          # payload
-          read -r -d '' payload <<EOF
-          {
-            "text": "🚀 *Build Started*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
-          }
-          EOF
-          # fire off, but don’t fail build if this errors
-          curl -X POST -H 'Content-Type: application/json' \
+          
+          payload='{
+            "text": "🚀 *Build Started*\n*Repository:* '"$GITHUB_REPOSITORY"'\n*Run #:* '"$GITHUB_RUN_NUMBER"'\n*Commit:* '"$commit_message"'\n*By:* '"$committer_name"'\n*URL:* '"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"'"
+          }'
+          
+          curl -X POST -H "Content-Type: application/json" \
             --data "$payload" \
-            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
+            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || echo "Notification failed"
 
-      # 3. Configure AWS creds
+      # ──── 3. Fetch Keys ────
+      - name: Fetch Public/Private Keys
+        run: |
+          echo "${{ secrets.PUBLIC_KEY_FILE }}" > public_key.pem
+          echo "${{ secrets.PRIVATE_KEY_FILE }}" > private_key.pem
+          chmod 400 public_key.pem private_key.pem
+          PUBLIC_KEY_CONTENT=$(base64 -w0 public_key.pem)
+          echo "PUBLIC_KEY_CONTENT=${PUBLIC_KEY_CONTENT}" >> $GITHUB_ENV
+
+      # ──── 4. Capture Commit Details ────
+      - name: Capture Commit Details
+        run: |
+          COMMIT_DETAILS=$(git log -1 --pretty=format:'%s|%an' || echo "Unknown|Unknown")
+          echo "COMMIT_MESSAGE=${COMMIT_DETAILS%%|*}" >> $GITHUB_ENV
+          echo "COMMITTER_NAME=${COMMIT_DETAILS##*|}" >> $GITHUB_ENV
+          GIT_SHA=$(git rev-parse --short HEAD)
+          echo "GIT_SHA=${GIT_SHA}" >> $GITHUB_ENV
+          echo "VERSION=${GIT_SHA}-${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
+
+      # ──── 5. Configure AWS Credentials ────
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      # 4. Fetch PEM keys
-      - name: Fetch public/private keys
-        run: |
-          echo "${{ secrets.PUBLIC_KEY_FILE }}"  > public_key.pem
-          echo "${{ secrets.PRIVATE_KEY_FILE }}" > private_key.pem
-
-      # 5. Capture commit details
-      - name: Capture commit details
-        run: |
-          INFO=$(git log -1 --pretty=format:'%s|%an')
-          echo "COMMIT_MESSAGE=${INFO%%|*}" >> $GITHUB_ENV
-          echo "COMMIT_AUTHOR=${INFO##*|}"   >> $GITHUB_ENV
-
-      # 6. Fetch artifact from S3
-      - name: Fetch JAR from S3
+      # ──── 6. Fetch Artifact from S3 ────
+      - name: Fetch Artifact from S3
         run: |
           mkdir -p libs
-          aws s3 cp s3://${{ env.S3_BUCKET_NAME }}/${{ env.S3_ARTIFACT_KEY }} libs/
+          aws s3 cp s3://${{ env.S3_BUCKET_NAME }}/${{ env.S3_ARTIFACT_KEY }} libs/ || exit 1
 
-      # 7. Retrieve Git version
-      - name: Retrieve Git version
+      # ──── 7. Set ECR Image Tags ────
+      - name: Set ECR Image Tags
         run: |
-          SHA=$(git rev-parse --short HEAD)
-          VER="${SHA}-${GITHUB_RUN_NUMBER}"
-          echo "VERSION=${VER}" >> $GITHUB_ENV
+          echo "ECR_REPO=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$ECR_REPO:$VERSION" >> $GITHUB_ENV
+          echo "LATEST_TAG=$ECR_REPO:latest" >> $GITHUB_ENV
 
-      # 8. Install jq (for later JSON parsing)
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      # ──── 8. Fetch AWS Secrets ────
+      - name: Fetch AWS Secrets
+        run: |
+          SECRETS_DB=$(aws secretsmanager get-secret-value --secret-id rtb-dev/db --query SecretString --output text --region ${{ env.AWS_REGION }})
+          SECRETS_AWS=$(aws secretsmanager get-secret-value --secret-id rtb-de/auth-service --query SecretString --output text --region ${{ env.AWS_REGION }})
+          
+          if [ -z "$SECRETS_DB" ] || [ -z "$SECRETS_AWS" ]; then
+            echo "❌ Error: Missing secrets"
+            exit 1
+          fi
+          
+          echo "$SECRETS_DB" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"' > secrets.env
+          echo "$SECRETS_AWS" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"' >> secrets.env
+          echo "PUBLIC_KEY_CONTENT=$PUBLIC_KEY_CONTENT" >> secrets.env
 
-      # 9. Install kubectl
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
-
-      # 10. Fetch kubeconfig via Bastion
-      - name: Fetch kubeconfig via Bastion
+      # ──── 9. Setup Kubernetes Access ────
+      - name: Setup SSH access to Bastion
         run: |
           echo "${{ secrets.BASTION_PEM_KEY }}" > bastion_key.pem
-          chmod 600 bastion_key.pem
-          ssh -o StrictHostKeyChecking=no \
-              -i bastion_key.pem \
-              ${{ env.BASTION_USER }}@${{ env.BASTION_IP }} \
-              "aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}"
-          scp -o StrictHostKeyChecking=no \
-              -i bastion_key.pem \
-              ${{ env.BASTION_USER }}@${{ env.BASTION_IP }}:~/.kube/config ./kubeconfig
+          chmod 400 bastion_key.pem
 
-      # 11. Fetch AWS Secrets & create/update K8s secret
-      - name: Fetch AWS Secrets & Store in Kubernetes
-        env:
-          KUBECONFIG: ${{ github.workspace }}/kubeconfig
+      - name: Configure kubectl via Bastion
         run: |
-          DB=$(aws secretsmanager get-secret-value --secret-id rtb-dev/db  --query SecretString --output text)
-          AW=$(aws secretsmanager get-secret-value --secret-id rtb-dev/auth-service --query SecretString --output text)
-          if [ -z "$DB" ] || [ -z "$AW" ]; then
-            echo "❌ Missing AWS secrets" && exit 1
+          ssh -i bastion_key.pem -o StrictHostKeyChecking=no \
+            ${{ env.BASTION_USER }}@${{ env.BASTION_IP }} \
+            "aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}"
+          
+          scp -i bastion_key.pem -o StrictHostKeyChecking=no \
+            ${{ env.BASTION_USER }}@${{ env.BASTION_IP }}:~/.kube/config ./kubeconfig
+          
+          if [ ! -s kubeconfig ]; then
+            echo "❌ Failed to fetch kubeconfig"
+            exit 1
           fi
-          echo "$DB" | jq -r 'to_entries|.[]|"\(.key)=\(.value)"'  > /tmp/secrets.env
-          echo "$AW" | jq -r 'to_entries|.[]|"\(.key)=\(.value)"' >> /tmp/secrets.env
-          tac /tmp/secrets.env | awk -F= '!seen[$1]++' | tac > /tmp/secrets.unique.env
-          PUB_B64=$(base64 public_key.pem | tr -d '\n')
-          echo "PUBLIC_KEY_CONTENT=${PUB_B64}" >> /tmp/secrets.unique.env
 
-          kubectl delete secret ${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }} --ignore-not-found
-          kubectl create secret generic ${{ env.DEPLOYMENT_NAME }} \
-            --from-env-file=/tmp/secrets.unique.env \
-            -n ${{ env.K8S_NAMESPACE }} \
-            --dry-run=client -o yaml | kubectl apply -f -
+      # ──── 10. Create Kubernetes Secrets ────
+      - name: Create Kubernetes Secrets
+        env:
+          KUBECONFIG: ./kubeconfig
+        run: |
+          kubectl delete secret ${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }} --ignore-not-found || true
+          kubectl create secret generic ${{ env.DEPLOYMENT_NAME }} --from-env-file=secrets.env -n ${{ env.K8S_NAMESPACE }}
 
-      # 12. Login to Amazon ECR
+      # ──── 11. Build and Push Docker Image ────
       - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region ${{ env.AWS_REGION }} \
-            | docker login --username AWS --password-stdin \
-              ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+        uses: aws-actions/amazon-ecr-login@v1
 
-      # 13. Build & push Docker image
-      - name: Build & Push Docker Image
+      - name: Build and Push Docker Image
         run: |
-          IMAGE_URI=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}
-          docker build --no-cache \
-            -t ${IMAGE_URI}:${{ env.VERSION }} \
-            -t ${IMAGE_URI}:latest .
-          docker push ${IMAGE_URI}:${{ env.VERSION }}
-          docker push ${IMAGE_URI}:latest
+          docker buildx create --use
+          docker buildx build --platform linux/amd64 \
+            -t $IMAGE_TAG -t $LATEST_TAG --push .
 
-      # 14. Deploy to EKS
+      # ──── 12. Deploy to EKS ────
       - name: Deploy to EKS
         env:
-          KUBECONFIG: ${{ github.workspace }}/kubeconfig
+          KUBECONFIG: ./kubeconfig
         run: |
           kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
-            ${{ env.DEPLOYMENT_NAME }}=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}:${{ env.VERSION }} \
-            -n ${{ env.K8S_NAMESPACE }}
+            ${{ env.DEPLOYMENT_NAME }}=$IMAGE_TAG -n ${{ env.K8S_NAMESPACE }}
           kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }}
 
-      # 15. Notify Build Result
+      # ──── 13. Notify Build Result ────
       - name: Notify Build Result
         if: always()
         continue-on-error: true
         run: |
-          set +e
-          # success vs failure
-          if [ "${{ job.status }}" = "success" ]; then
-            build_status="✅ Succeeded"
+          if [[ "${{ job.status }}" == "success" ]]; then
+            status="✅ *Build Success*"
           else
-            build_status="❌ Failed"
+            status="❌ *Build Failure*"
           fi
-          commit_details=$(git log -1 --pretty=format:'%s|%an')
-          commit_message=${commit_details%%|*}
-          committer_name=${commit_details##*|}
-          build_name="${GITHUB_REPOSITORY}"
-          build_number="${GITHUB_RUN_NUMBER}"
-          build_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          read -r -d '' result_payload <<EOF
-          {
-            "text": "🔔 *Build Completed*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Status:* ${build_status}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
-          }
-          EOF
-          curl -X POST -H 'Content-Type: application/json' \
-            --data "$result_payload" \
-            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
+          
+          payload='{
+            "text": "'"$status"'\n*Repository:* '"$GITHUB_REPOSITORY"'\n*Run #:* '"$GITHUB_RUN_NUMBER"'\n*Commit:* '"${{ env.COMMIT_MESSAGE }}"'\n*By:* '"${{ env.COMMITTER_NAME }}"'\n*URL:* '"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"'"
+          }'
+          
+          curl -X POST -H "Content-Type: application/json" \
+            --data "$payload" \
+            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || echo "Result notification failed"
