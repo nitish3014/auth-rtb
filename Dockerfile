@@ -13,9 +13,8 @@ WORKDIR /app
 
 COPY --from=builder /tmp/app/build/libs/*.jar /app/app.jar
 COPY entrypoint.sh          /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh && apk add --no-cache bash
 
-RUN chmod +x /app/entrypoint.sh \
- && apk add --no-cache bash
 
 EXPOSE 8080
-ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
