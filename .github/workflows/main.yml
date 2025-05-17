@@ -31,23 +31,36 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          # grab last commit info
           commit_details=$(git log -1 --pretty=format:'%s|%an')
           commit_message=${commit_details%%|*}
           committer_name=${commit_details##*|}
           build_name="${GITHUB_REPOSITORY}"
           build_number="${GITHUB_RUN_NUMBER}"
           build_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          # payload
-          read -r -d '' payload <<EOF
+
+          # Google Chat payload
+          read -r -d '' gchat_payload <<EOF
           {
             "text": "🚀 *Build Started*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
           }
           EOF
-          # fire off, but don’t fail build if this errors
+
+          # Slack payload
+          read -r -d '' slack_payload <<EOF
+          {
+            "text": ":rocket: *Build Started*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
+          }
+          EOF
+
+          # Send Google Chat notification
           curl -X POST -H 'Content-Type: application/json' \
-            --data "$payload" \
+            --data "$gchat_payload" \
             "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
+
+          # Send Slack notification
+          curl -X POST -H 'Content-Type: application/json' \
+            --data "$slack_payload" \
+            "${{ secrets.SLACK_WEBHOOK }}" || true
 
       # 3. Configure AWS creds
       - name: Configure AWS credentials
@@ -161,7 +174,6 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          # success vs failure
           if [ "${{ job.status }}" = "success" ]; then
             build_status="✅ Succeeded"
           else
@@ -173,11 +185,25 @@ jobs:
           build_name="${GITHUB_REPOSITORY}"
           build_number="${GITHUB_RUN_NUMBER}"
           build_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          read -r -d '' result_payload <<EOF
+
+          # Google Chat payload
+          read -r -d '' gchat_payload <<EOF
           {
             "text": "🔔 *Build Completed*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Status:* ${build_status}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
           }
           EOF
+
+          # Slack payload
+          read -r -d '' slack_payload <<EOF
+          {
+            "text": ":bell: *Build Completed*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Status:* ${build_status}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
+          }
+          EOF
+
           curl -X POST -H 'Content-Type: application/json' \
-            --data "$result_payload" \
+            --data "$gchat_payload" \
             "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
+
+          curl -X POST -H 'Content-Type: application/json' \
+            --data "$slack_payload" \
+            "${{ secrets.SLACK_WEBHOOK }}" || true
