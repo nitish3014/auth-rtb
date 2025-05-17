@@ -69,7 +69,7 @@ jobs:
           echo "GIT_SHA=${GIT_SHA}" >> $GITHUB_ENV
           echo "VERSION=${GIT_SHA}-${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
 
-      # ──── 5. Fetch Artifact from S3 ────
+      # ──── 5. Configure AWS Credentials ────
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -77,31 +77,35 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # ──── 6. Fetch Artifact from S3 ────
       - name: Fetch Artifact from S3
         run: |
           mkdir -p libs
           aws s3 cp s3://${{ env.S3_BUCKET_NAME }}/${{ env.S3_ARTIFACT_KEY }} libs/ || exit 1
 
-      # ──── 6. Retrieve Git Version ────
+      # ──── 7. Set ECR Image Tags ────
       - name: Set ECR Image Tags
         run: |
           echo "ECR_REPO=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}" >> $GITHUB_ENV
           echo "IMAGE_TAG=$ECR_REPO:$VERSION" >> $GITHUB_ENV
           echo "LATEST_TAG=$ECR_REPO:latest" >> $GITHUB_ENV
 
-      # ──── 7. Fetch AWS Secrets & Store in Kubernetes ────
+      # ──── 8. Fetch AWS Secrets ────
       - name: Fetch AWS Secrets
         run: |
           SECRETS_DB=$(aws secretsmanager get-secret-value --secret-id rtb-prod/db --query SecretString --output text --region ${{ env.AWS_REGION }})
           SECRETS_AWS=$(aws secretsmanager get-secret-value --secret-id rtb-prod/aws --query SecretString --output text --region ${{ env.AWS_REGION }})
           
-          [ -z "$SECRETS_DB" ] || [ -z "$SECRETS_AWS" ] && echo "❌ Error: Missing secrets" && exit 1
+          if [ -z "$SECRETS_DB" ] || [ -z "$SECRETS_AWS" ]; then
+            echo "❌ Error: Missing secrets"
+            exit 1
+          fi
           
           echo "$SECRETS_DB" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"' > secrets.env
           echo "$SECRETS_AWS" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"' >> secrets.env
           echo "PUBLIC_KEY_CONTENT=$PUBLIC_KEY_CONTENT" >> secrets.env
 
-      # ──── 8. Setup Kubernetes Access via Bastion ────
+      # ──── 9. Setup Kubernetes Access ────
       - name: Setup SSH access to Bastion
         run: |
           echo "${{ secrets.BASTION_PEM_KEY }}" > bastion_key.pem
@@ -116,8 +120,12 @@ jobs:
           scp -i bastion_key.pem -o StrictHostKeyChecking=no \
             ${{ env.BASTION_USER }}@${{ env.BASTION_IP }}:~/.kube/config ./kubeconfig
           
-          [ ! -s kubeconfig ] && echo "❌ Failed to fetch kubeconfig" && exit 1
+          if [ ! -s kubeconfig ]; then
+            echo "❌ Failed to fetch kubeconfig"
+            exit 1
+          fi
 
+      # ──── 10. Create Kubernetes Secrets ────
       - name: Create Kubernetes Secrets
         env:
           KUBECONFIG: ./kubeconfig
@@ -125,7 +133,7 @@ jobs:
           kubectl delete secret ${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }} --ignore-not-found || true
           kubectl create secret generic ${{ env.DEPLOYMENT_NAME }} --from-env-file=secrets.env -n ${{ env.K8S_NAMESPACE }}
 
-      # ──── 9. Build and Push Docker Image ────
+      # ──── 11. Build and Push Docker Image ────
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v1
 
@@ -135,7 +143,7 @@ jobs:
           docker buildx build --platform linux/amd64 \
             -t $IMAGE_TAG -t $LATEST_TAG --push .
 
-      # ──── 10. Deploy to EKS ────
+      # ──── 12. Deploy to EKS ────
       - name: Deploy to EKS
         env:
           KUBECONFIG: ./kubeconfig
@@ -144,7 +152,7 @@ jobs:
             ${{ env.DEPLOYMENT_NAME }}=$IMAGE_TAG -n ${{ env.K8S_NAMESPACE }}
           kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }}
 
-      # ──── 11. Notify Build Result ────
+      # ──── 13. Notify Build Result ────
       - name: Notify Build Result
         if: always()
         continue-on-error: true
