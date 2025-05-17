@@ -1,6 +1,6 @@
 ## Auth Service
   
-## Environment Variables 
+## Environment Variables  
 ```shell
 CYPHER_KEY = 32_BYTE_KEY;  # eg: LEwZ3k4Z8WeiTxJmyp0qOKZL+DoXJg2hXawYfKGZjZsXarbfknCtarb5JHFphnUm
 DATABASE_HOST = localhost; # use your local db credentials
