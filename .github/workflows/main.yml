@@ -144,16 +144,28 @@ jobs:
             -t ${IMAGE_URI}:latest .
           docker push ${IMAGE_URI}:${{ env.VERSION }}
           docker push ${IMAGE_URI}:latest
+          docker image prune -a -f
+
 
       # 14. Deploy to EKS
       - name: Deploy to EKS
         env:
           KUBECONFIG: ${{ github.workspace }}/kubeconfig
         run: |
+          # Force a new deployment by updating an annotation
+          kubectl patch deployment ${{ env.DEPLOYMENT_NAME }} \
+            -n ${{ env.K8S_NAMESPACE }} \
+            -p '{"spec":{"template":{"metadata":{"annotations":{"deploymentTimestamp":"'"$(date +%s)"'"}}}}}'
+          
+          # Update the image
           kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
             ${{ env.DEPLOYMENT_NAME }}=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}:${{ env.VERSION }} \
             -n ${{ env.K8S_NAMESPACE }}
-          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }}
+          
+          # Wait for rollout with timeout
+          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --timeout=300s
 
       # 15. Notify Build Result
       - name: Notify Build Result
