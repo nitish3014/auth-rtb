@@ -24,89 +24,75 @@ jobs:
       # 1. Checkout
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
 
-      # 2. Notify Build Start
+      # 2. Fix gradlew permissions
+      - name: Set gradlew executable
+        run: chmod +x gradlew
+
+      # 3. Notify Build Start
       - name: Notify Build Start
-        id: notify_start
         continue-on-error: true
         run: |
-          set +e
-          commit_details=$(git log -1 --pretty=format:'%s|%an')
+          commit_details=$(git log -1 --pretty=format:'%s|%an' || echo "Unknown|Unknown")
           commit_message=${commit_details%%|*}
           committer_name=${commit_details##*|}
-          build_name="${GITHUB_REPOSITORY}"
-          build_number="${GITHUB_RUN_NUMBER}"
-          build_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          
+          payload='{
+            "text": "🚀 *Build Started*\n*Repository:* '"$GITHUB_REPOSITORY"'\n*Run #:* '"$GITHUB_RUN_NUMBER"'\n*Commit:* '"$commit_message"'\n*By:* '"$committer_name"'\n*URL:* '"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"'"
+          }'
+          
+          curl -X POST -H "Content-Type: application/json" \
+            --data "$payload" \
+            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || echo "Notification failed"
 
-          # Google Chat payload
-          read -r -d '' gchat_payload <<EOF
-          {
-            "text": "🚀 *Build Started*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
-          }
-          EOF
-
-          # Slack payload
-          read -r -d '' slack_payload <<EOF
-          {
-            "text": ":rocket: *Build Started*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
-          }
-          EOF
-
-          # Send Google Chat notification
-          curl -X POST -H 'Content-Type: application/json' \
-            --data "$gchat_payload" \
-            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
-
-          # Send Slack notification
-          curl -X POST -H 'Content-Type: application/json' \
-            --data "$slack_payload" \
-            "${{ secrets.SLACK_WEBHOOK }}" || true
-
-      # 3. Configure AWS creds
+      # 4. Configure AWS creds
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      # 4. Fetch PEM keys
+      # 5. Fetch PEM keys
       - name: Fetch public/private keys
         run: |
-          echo "${{ secrets.PUBLIC_KEY_FILE }}"  > public_key.pem
+          echo "${{ secrets.PUBLIC_KEY_FILE }}" > public_key.pem
           echo "${{ secrets.PRIVATE_KEY_FILE }}" > private_key.pem
+          chmod 600 public_key.pem private_key.pem
 
-      # 5. Capture commit details
+      # 6. Capture commit details
       - name: Capture commit details
         run: |
           INFO=$(git log -1 --pretty=format:'%s|%an')
           echo "COMMIT_MESSAGE=${INFO%%|*}" >> $GITHUB_ENV
-          echo "COMMIT_AUTHOR=${INFO##*|}"   >> $GITHUB_ENV
+          echo "COMMIT_AUTHOR=${INFO##*|}" >> $GITHUB_ENV
 
-      # 6. Fetch artifact from S3
+      # 7. Fetch artifact from S3
       - name: Fetch JAR from S3
         run: |
           mkdir -p libs
-          aws s3 cp s3://${{ env.S3_BUCKET_NAME }}/${{ env.S3_ARTIFACT_KEY }} libs/
+          aws s3 cp s3://${{ env.S3_BUCKET_NAME }}/${{ env.S3_ARTIFACT_KEY }} libs/ || exit 1
 
-      # 7. Retrieve Git version
+      # 8. Retrieve Git version
       - name: Retrieve Git version
         run: |
           SHA=$(git rev-parse --short HEAD)
           VER="${SHA}-${GITHUB_RUN_NUMBER}"
           echo "VERSION=${VER}" >> $GITHUB_ENV
 
-      # 8. Install jq (for later JSON parsing)
+      # 9. Install jq
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      # 9. Install kubectl
+      # 10. Install kubectl
       - name: Install kubectl
         uses: azure/setup-kubectl@v3
         with:
           version: 'latest'
 
-      # 10. Fetch kubeconfig via Bastion
+      # 11. Fetch kubeconfig via Bastion
       - name: Fetch kubeconfig via Bastion
         run: |
           echo "${{ secrets.BASTION_PEM_KEY }}" > bastion_key.pem
@@ -119,92 +105,81 @@ jobs:
               -i bastion_key.pem \
               ${{ env.BASTION_USER }}@${{ env.BASTION_IP }}:~/.kube/config ./kubeconfig
 
-      # 11. Fetch AWS Secrets & create/update K8s secret
+      # 12. Fetch AWS Secrets & create K8s secret
       - name: Fetch AWS Secrets & Store in Kubernetes
         env:
-          KUBECONFIG: ${{ github.workspace }}/kubeconfig
+          KUBECONFIG: ./kubeconfig
         run: |
-          DB=$(aws secretsmanager get-secret-value --secret-id rtb-dev/db  --query SecretString --output text)
+          DB=$(aws secretsmanager get-secret-value --secret-id rtb-dev/db --query SecretString --output text)
           AW=$(aws secretsmanager get-secret-value --secret-id rtb-dev/auth-service --query SecretString --output text)
           if [ -z "$DB" ] || [ -z "$AW" ]; then
             echo "❌ Missing AWS secrets" && exit 1
           fi
-          echo "$DB" | jq -r 'to_entries|.[]|"\(.key)=\(.value)"'  > /tmp/secrets.env
-          echo "$AW" | jq -r 'to_entries|.[]|"\(.key)=\(.value)"' >> /tmp/secrets.env
-          tac /tmp/secrets.env | awk -F= '!seen[$1]++' | tac > /tmp/secrets.unique.env
-          PUB_B64=$(base64 public_key.pem | tr -d '\n')
-          echo "PUBLIC_KEY_CONTENT=${PUB_B64}" >> /tmp/secrets.unique.env
+          echo "$DB" | jq -r 'to_entries|.[]|"\(.key)=\(.value)"' > secrets.env
+          echo "$AW" | jq -r 'to_entries|.[]|"\(.key)=\(.value)"' >> secrets.env
+          PUB_B64=$(base64 -w0 public_key.pem)
+          echo "PUBLIC_KEY_CONTENT=${PUB_B64}" >> secrets.env
 
           kubectl delete secret ${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }} --ignore-not-found
           kubectl create secret generic ${{ env.DEPLOYMENT_NAME }} \
-            --from-env-file=/tmp/secrets.unique.env \
-            -n ${{ env.K8S_NAMESPACE }} \
-            --dry-run=client -o yaml | kubectl apply -f -
+            --from-env-file=secrets.env \
+            -n ${{ env.K8S_NAMESPACE }}
 
-      # 12. Login to Amazon ECR
+      # 13. Login to Amazon ECR
       - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region ${{ env.AWS_REGION }} \
-            | docker login --username AWS --password-stdin \
-              ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+        uses: aws-actions/amazon-ecr-login@v1
 
-      # 13. Build & push Docker image
+      # 14. Build & push Docker image
       - name: Build & Push Docker Image
         run: |
           IMAGE_URI=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}
+          
+          # Build with proper platform and entrypoint
           docker buildx create --use
-          docker buildx build --platform linux/amd64,linux/arm64 \
-            -t ${IMAGE_URI}:${VERSION} \
+          docker buildx build --platform linux/amd64 \
+            -t ${IMAGE_URI}:${{ env.VERSION }} \
             -t ${IMAGE_URI}:latest \
             --push .
+          
+          # Save image URI for deployment
+          echo "IMAGE_URI=${IMAGE_URI}" >> $GITHUB_ENV
 
-
-      # 14. Deploy to EKS
+      # 15. Deploy to EKS with rollout strategy
       - name: Deploy to EKS
         env:
-          KUBECONFIG: ${{ github.workspace }}/kubeconfig
+          KUBECONFIG: ./kubeconfig
         run: |
+          # Add rollout strategy to deployment if not exists
+          kubectl patch deployment ${{ env.DEPLOYMENT_NAME }} \
+            -n ${{ env.K8S_NAMESPACE }} \
+            -p '{"spec":{"strategy":{"rollingUpdate":{"maxSurge":"25%","maxUnavailable":"25%"}}}}' \
+            --type=merge || true
+          
+          # Perform deployment
           kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
-            ${{ env.DEPLOYMENT_NAME }}=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}:${{ env.VERSION }} \
+            ${{ env.DEPLOYMENT_NAME }}=$IMAGE_URI:${{ env.VERSION }} \
             -n ${{ env.K8S_NAMESPACE }}
-          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }}
+          
+          # Wait for rollout with timeout
+          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --timeout=300s
 
-      # 15. Notify Build Result
+      # 16. Notify Build Result
       - name: Notify Build Result
         if: always()
         continue-on-error: true
         run: |
-          set +e
-          if [ "${{ job.status }}" = "success" ]; then
-            build_status="✅ Succeeded"
+          if [[ "${{ job.status }}" == "success" ]]; then
+            status="✅ Build Success"
           else
-            build_status="❌ Failed"
+            status="❌ Build Failure"
           fi
-          commit_details=$(git log -1 --pretty=format:'%s|%an')
-          commit_message=${commit_details%%|*}
-          committer_name=${commit_details##*|}
-          build_name="${GITHUB_REPOSITORY}"
-          build_number="${GITHUB_RUN_NUMBER}"
-          build_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-
-          # Google Chat payload
-          read -r -d '' gchat_payload <<EOF
-          {
-            "text": "🔔 *Build Completed*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Status:* ${build_status}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
-          }
-          EOF
-
-          # Slack payload
-          read -r -d '' slack_payload <<EOF
-          {
-            "text": ":bell: *Build Completed*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Status:* ${build_status}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
-          }
-          EOF
-
-          curl -X POST -H 'Content-Type: application/json' \
-            --data "$gchat_payload" \
-            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
-
-          curl -X POST -H 'Content-Type: application/json' \
-            --data "$slack_payload" \
-            "${{ secrets.SLACK_WEBHOOK }}" || true
+          
+          payload='{
+            "text": "'"$status"'\n*Repository:* '"$GITHUB_REPOSITORY"'\n*Run #:* '"$GITHUB_RUN_NUMBER"'\n*Commit:* '"${{ env.COMMIT_MESSAGE }}"'\n*By:* '"${{ env.COMMIT_AUTHOR }}"'\n*URL:* '"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"'"
+          }'
+          
+          curl -X POST -H "Content-Type: application/json" \
+            --data "$payload" \
+            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || echo "Notification failed"
