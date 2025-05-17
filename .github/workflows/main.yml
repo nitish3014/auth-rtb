@@ -152,11 +152,11 @@ jobs:
       - name: Build & Push Docker Image
         run: |
           IMAGE_URI=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.DEPLOYMENT_NAME }}
-          docker build --no-cache \
-            -t ${IMAGE_URI}:${{ env.VERSION }} \
-            -t ${IMAGE_URI}:latest .
-          docker push ${IMAGE_URI}:${{ env.VERSION }}
-          docker push ${IMAGE_URI}:latest
+          docker buildx create --use
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            -t ${IMAGE_URI}:${VERSION} \
+            -t ${IMAGE_URI}:latest \
+            --push .
 
 
       # 14. Deploy to EKS
