@@ -27,23 +27,27 @@ jobs:
 
       # 2. Notify Build Start
       - name: Notify Build Start
+        id: notify_start
         continue-on-error: true
         run: |
           set +e
-          INFO=$(git log -1 --pretty=format:'%s|%an')
-          MSG=${INFO%%|*}
-          AUTHOR=${INFO##*|}
-          read -r -d '' PAYLOAD <<EOF
-{"text":"🚀 *Build Started*
-*Repo:* ${GITHUB_REPOSITORY}
-*Run #:* ${GITHUB_RUN_NUMBER}
-*Commit:* ${MSG}
-*Author:* ${AUTHOR}
-*URL:* ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"}
-EOF
-          curl -s -X POST -H "Content-Type: application/json" \
-               --data "$PAYLOAD" \
-               "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
+          # grab last commit info
+          commit_details=$(git log -1 --pretty=format:'%s|%an')
+          commit_message=${commit_details%%|*}
+          committer_name=${commit_details##*|}
+          build_name="${GITHUB_REPOSITORY}"
+          build_number="${GITHUB_RUN_NUMBER}"
+          build_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          # payload
+          read -r -d '' payload <<EOF
+          {
+            "text": "🚀 *Build Started*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
+          }
+          EOF
+          # fire off, but don’t fail build if this errors
+          curl -X POST -H 'Content-Type: application/json' \
+            --data "$payload" \
+            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
 
       # 3. Configure AWS creds
       - name: Configure AWS credentials
@@ -157,19 +161,23 @@ EOF
         continue-on-error: true
         run: |
           set +e
-          if [[ "${{ job.status }}" == "success" ]]; then
-            RESULT="✅ Build Success"
+          # success vs failure
+          if [ "${{ job.status }}" = "success" ]; then
+            build_status="✅ Succeeded"
           else
-            RESULT="❌ Build Failure"
+            build_status="❌ Failed"
           fi
-          read -r -d '' PAYLOAD <<EOF
-{"text":"${RESULT}
-*Repo:* ${GITHUB_REPOSITORY}
-*Run #:* ${GITHUB_RUN_NUMBER}
-*Commit:* ${COMMIT_MESSAGE}
-*Author:* ${COMMIT_AUTHOR}
-*URL:* ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"}
-EOF
-          curl -s -X POST -H "Content-Type: application/json" \
-               --data "$PAYLOAD" \
-               "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
+          commit_details=$(git log -1 --pretty=format:'%s|%an')
+          commit_message=${commit_details%%|*}
+          committer_name=${commit_details##*|}
+          build_name="${GITHUB_REPOSITORY}"
+          build_number="${GITHUB_RUN_NUMBER}"
+          build_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          read -r -d '' result_payload <<EOF
+          {
+            "text": "🔔 *Build Completed*\n*Repository:* ${build_name}\n*Run #:* ${build_number}\n*Status:* ${build_status}\n*Trigger Commit:* ${commit_message}\n*By:* ${committer_name}\n*URL:* ${build_url}"
+          }
+          EOF
+          curl -X POST -H 'Content-Type: application/json' \
+            --data "$result_payload" \
+            "${{ secrets.GOOGLE_CHAT_WEBHOOK }}" || true
