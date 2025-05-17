@@ -136,7 +136,7 @@ jobs:
           
           # Build with proper platform and entrypoint
           docker buildx create --use
-          docker buildx build --platform linux/amd64 \
+          docker buildx build --platform linux/amd64,linux/arm64 \
             -t ${IMAGE_URI}:${{ env.VERSION }} \
             -t ${IMAGE_URI}:latest \
             --push .
@@ -157,7 +157,7 @@ jobs:
           
           # Perform deployment
           kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
-            ${{ env.DEPLOYMENT_NAME }}=$IMAGE_URI:${{ env.VERSION }} \
+            ${{ env.DEPLOYMENT_NAME }}=$IMAGE_URI:latest \
             -n ${{ env.K8S_NAMESPACE }}
           
           # Wait for rollout with timeout
