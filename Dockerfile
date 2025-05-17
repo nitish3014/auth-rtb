@@ -4,6 +4,8 @@ WORKDIR /tmp/app
 
 COPY . /tmp/app
 
+RUN chmod +x gradlew
+
 RUN ./gradlew clean build --stacktrace
 
 FROM eclipse-temurin:17-jre-alpine
