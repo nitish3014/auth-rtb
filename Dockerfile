@@ -3,6 +3,7 @@ FROM eclipse-temurin:17-jdk as builder
 WORKDIR /tmp/app
 
 COPY . /tmp/app
+RUN chmod +x gradlew
 
 RUN ./gradlew clean build -x test --stacktrace
 
